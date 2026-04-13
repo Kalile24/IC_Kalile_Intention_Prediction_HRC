@@ -1,0 +1,600 @@
+"""
+run_webcam.py — Pipeline HRC sem câmera OAK-D.
+(Versão de diagnóstico — inclui ferramentas para testar hipóteses de falha)
+
+Substitui o run.py original usando:
+  - OpenCV para captura de vídeo (webcam do notebook)
+  - MediaPipe Pose (CPU) para estimativa de esqueleto
+  - IntentionPredictor (DLinear) para predição de intenção
+
+Modos de diagnóstico disponíveis:
+  --diag        Exibe entropia, probabilidades brutas e estatísticas de Z
+  --no_qrot     Desativa a rotação câmera→mundo (quaternion identidade)
+  --proc_fps N  Limita o processamento a N fps (padrão: 8, igual ao treino)
+  --replay PKL  Reproduz um arquivo .pkl gravado com a OAK-D
+
+Uso básico:
+    python run_webcam.py --show --task webcam001
+
+Diagnóstico completo:
+    python run_webcam.py --show --task webcam001 --diag --proc_fps 8
+
+Testar sem rotação de câmera:
+    python run_webcam.py --show --task webcam001 --diag --no_qrot
+
+Replay de pkl original:
+    python run_webcam.py --diag --replay human_traj/abc/abc001.pkl
+"""
+
+import os
+import sys
+import cv2
+import time
+import argparse
+import pickle
+import numpy as np
+import torch
+import torch.nn.functional as F
+from torch.distributions import Categorical
+from pathlib import Path
+
+FILE_DIR = Path(__file__).parent
+sys.path.append(str(FILE_DIR / 'depthai_blazepose'))
+sys.path.append(str(FILE_DIR / 'traj_intention'))
+
+from mediapipe_fallback import MediaPipePoseModule
+from predict import IntentionPredictor
+from Dataset import INTENTION_LIST
+
+# [ROS] import rospy
+# [ROS] from std_msgs.msg import String
+
+# ── Quaternion de rotação câmera→mundo (mesmo do run.py original) ────────────
+# Calibrado para a posição da OAK-D no experimento original.
+# Com webcam em posição diferente, recalibrar este valor ou usar --no_qrot.
+_CAM_TO_WORLD_Q = np.array(
+    [0.14070565, -0.15007018, -0.7552408, 0.62232804], dtype=np.float32
+)
+_IDENTITY_Q = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+
+def _qrot(q, v):
+    """Rotação de vetor v pelo quaternion q. Idêntico ao run.py e Dataset.py."""
+    qvec = q[..., 1:]
+    uv   = np.cross(qvec, v, len(q.shape) - 1)
+    uuv  = np.cross(qvec, uv, len(q.shape) - 1)
+    return v + 2 * (q[..., :1] * uv + uuv)
+
+
+def camera_to_world(X, quat=None):
+    """
+    Aplica a transformação câmera→mundo.
+    quat: quaternion a usar (None = usar _CAM_TO_WORLD_Q calibrado).
+          Passe _IDENTITY_Q para desativar a rotação (hipótese H2).
+    """
+    if quat is None:
+        quat = _CAM_TO_WORLD_Q
+    return _qrot(np.tile(quat, (*X.shape[:-1], 1)), X)
+
+
+# ── Limiar de movimento: abaixo disso a pose é considerada estática ──────────
+# Valor em coordenadas normalizadas (0-2) após min-max.
+STILLNESS_THRESHOLD = 0.015
+
+# ── Nomes das classes (ordem do INTENTION_LIST) ───────────────────────────────
+CLASS_NAMES = [k for k, v in sorted(INTENTION_LIST.items(), key=lambda x: x[1])]
+
+
+def get_intention_name(index):
+    for key, value in INTENTION_LIST.items():
+        if value == index:
+            return key
+    return 'no_action'
+
+
+def send_intention(intention_name):
+    """Publica a intenção. Atualmente apenas imprime; descomentar para ROS."""
+    print(f'[INTENTION] {intention_name}')
+    # [ROS] pub.publish(intention_name)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bloco de diagnóstico
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_diag(predictor, inputs, poses_raw):
+    """
+    Calcula métricas de diagnóstico sem aplicar nenhuma restrição.
+
+    Retorna dict com:
+      probs      — probabilidades softmax para cada classe (4 valores)
+      entropy    — entropia de Shannon das probabilidades
+      z_raw_min  — mínimo do eixo Z antes da normalização
+      z_raw_max  — máximo do eixo Z antes da normalização
+      z_raw_std  — desvio-padrão do eixo Z antes da normalização
+      z_norm_std — desvio-padrão do eixo Z após normalização min-max
+    """
+    with torch.no_grad():
+        _, pred_logits = predictor.model(inputs)
+    probs_t = F.softmax(pred_logits, dim=1)[0].detach()
+    entropy_val = float(Categorical(probs=probs_t).entropy())
+    probs_np = probs_t.numpy()
+
+    z = poses_raw[:, :, 2]
+    return {
+        'probs'     : probs_np,
+        'entropy'   : entropy_val,
+        'z_raw_min' : float(z.min()),
+        'z_raw_max' : float(z.max()),
+        'z_raw_std' : float(z.std()),
+        'z_norm_std': float(((2 * (z - z.min()) / (z.max() - z.min() + 1e-8))).std()),
+    }
+
+
+def draw_diag_panel(frame, diag, motion_disp, is_still, qrot_active, proc_fps_target):
+    """
+    Sobrepõe painel de diagnóstico no canto superior direito do frame.
+    Desenhado sobre o display_frame (já ampliado) para fontes nítidas.
+    """
+    h, w = frame.shape[:2]
+    line_h   = 28
+    fs       = 0.58   # font scale
+    n_rows   = len(CLASS_NAMES) + 8
+    panel_w  = 420
+    panel_x  = w - panel_w - 8
+    panel_y  = 10
+
+    # Fundo opaco — sem addWeighted para evitar piscar
+    cv2.rectangle(frame,
+                  (panel_x - 6, panel_y - 6),
+                  (w - 4, panel_y + line_h * n_rows + 4),
+                  (20, 20, 20), -1)
+
+    def put(text, row, color=(220, 220, 220)):
+        cv2.putText(frame, text, (panel_x, panel_y + row * line_h),
+                    cv2.FONT_HERSHEY_SIMPLEX, fs, color, 1, cv2.LINE_AA)
+
+    put('=== DIAGNOSTICO ===', 0, (100, 255, 100))
+    put(f'qrot: {"ON" if qrot_active else "OFF (identidade)"}', 1,
+        (100, 200, 255) if qrot_active else (255, 150, 50))
+    put(f'proc_fps_alvo: {proc_fps_target}', 2)
+
+    entropy = diag['entropy']
+    ent_color = (0, 200, 0) if entropy < 0.4 else (0, 165, 255) if entropy < 0.8 else (0, 0, 255)
+    put(f'entropia: {entropy:.3f}', 3, ent_color)
+    put(f'motion : {motion_disp:.4f} {"(PARADO)" if is_still else ""}', 4)
+    put('classe          prob  barra', 5, (180, 180, 180))
+
+    max_prob = float(max(diag['probs']))
+    for i, name in enumerate(CLASS_NAMES):
+        prob = float(diag['probs'][i])
+        bar_len = int(prob * 110)
+        bar_color = (0, 200, 0) if prob == max_prob else (100, 100, 200)
+        put(f'{name[:14]:<14} {prob:.2f}', 6 + i)
+        bar_y = panel_y + (6 + i) * line_h
+        cv2.rectangle(frame,
+                      (panel_x + 250, bar_y - 14),
+                      (panel_x + 250 + bar_len, bar_y - 4),
+                      bar_color, -1)
+
+    row = 6 + len(CLASS_NAMES)
+    put(f'Z raw  std={diag["z_raw_std"]:.4f}', row, (180, 180, 100))
+    put(f'       [{diag["z_raw_min"]:.3f}, {diag["z_raw_max"]:.3f}]', row + 1, (180, 180, 100))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Modo replay: reproduz um .pkl gravado com OAK-D
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_replay(args):
+    """
+    Reproduz um arquivo .pkl gravado com a OAK-D e passa os landmarks
+    pelo mesmo pipeline de predição. Não usa câmera.
+
+    Serve para H5: verificar se o modelo funciona com dados de treino reais.
+    """
+    pkl_path = Path(args.replay)
+    if not pkl_path.exists():
+        print(f'[ERRO] Arquivo não encontrado: {pkl_path}')
+        return
+
+    with open(pkl_path, 'rb') as f:
+        bodies = pickle.load(f)
+    print(f'[REPLAY] {len(bodies)} frames carregados de {pkl_path}')
+
+    predictor = IntentionPredictor(model_type=args.model_type)
+    quat = _IDENTITY_Q if args.no_qrot else None
+
+    seq_len    = args.seq_len
+    traj_queue = []
+    smoothed_probs = None
+    old_intention  = None
+    intention_queue = []
+
+    for frame_idx, body in enumerate(bodies):
+        lms = body.landmarks
+        # Normaliza para 15 joints se veio com 33 (arquivos do OAK-D)
+        if lms.shape[0] == 33:
+            upperbody = np.concatenate((lms[11:25, :], lms[0:1, :]), axis=0)
+        else:
+            upperbody = lms  # já são 15
+
+        if len(traj_queue) >= seq_len:
+            traj_queue.pop(0)
+        traj_queue.append(upperbody)
+
+        if len(traj_queue) < seq_len:
+            continue
+
+        poses = np.array(traj_queue)
+        motion_disp = float(np.abs(np.diff(poses, axis=0)).mean())
+
+        # Pré-processamento idêntico ao Dataset.py e run.py
+        poses_norm  = 2 * (poses - poses.min()) / (poses.max() - poses.min() + 1e-8)
+        poses_world = camera_to_world(poses_norm, quat)
+        poses_world[:, :, 2] -= poses_world[:, :, 2].min()
+
+        inputs = torch.tensor(poses_world.reshape(1, seq_len, -1)).float()
+
+        diag = None
+        if args.diag:
+            diag = compute_diag(predictor, inputs, poses)
+
+        _, pred_intention = predictor.predict(inputs, restrict=args.restrict)
+        intention = get_intention_name(pred_intention[0].item())
+
+        # Saída no terminal
+        if args.diag and diag:
+            probs_str = '  '.join(
+                f'{CLASS_NAMES[i]}={diag["probs"][i]:.2f}' for i in range(len(CLASS_NAMES))
+            )
+            print(
+                f'[{frame_idx:04d}] intenção={intention:<18} '
+                f'entropia={diag["entropy"]:.3f}  motion={motion_disp:.4f}  |  {probs_str}'
+            )
+        else:
+            print(f'[{frame_idx:04d}] intenção={intention}  motion={motion_disp:.4f}')
+
+    print('[REPLAY] Concluído.')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline principal: webcam ao vivo
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_live(args):
+    show       = args.show
+    task       = args.task
+    seq_len    = args.seq_len
+    send_win   = args.send_window
+    restrict   = args.restrict
+    camera_id  = args.camera
+    save_video = args.video
+    diag_mode  = args.diag
+    quat       = _IDENTITY_Q if args.no_qrot else None
+    proc_fps   = args.proc_fps   # alvo de FPS de processamento (0 = sem limite)
+
+    ROOT_DIR = FILE_DIR / 'human_traj' / task[:-3]
+    ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    img_dir = ROOT_DIR / f'images{task[-3:]}'
+    if img_dir.exists():
+        import shutil
+        shutil.rmtree(img_dir)
+    img_dir.mkdir()
+
+    # ── Câmera ──────────────────────────────────────────────────────────────────
+    cap = cv2.VideoCapture(camera_id)
+    if not cap.isOpened():
+        print(f'Erro: não foi possível abrir a câmera {camera_id}')
+        return
+    img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f'Câmera aberta: {img_w}x{img_h}')
+
+    # ── Janela de exibição (criada uma vez para evitar piscar) ───────────────────
+    DISPLAY_SCALE = 1.6  # fator de ampliação para facilitar leitura
+    disp_w = int(img_w * DISPLAY_SCALE)
+    disp_h = int(img_h * DISPLAY_SCALE)
+    if show:
+        cv2.namedWindow('HRC Webcam', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('HRC Webcam', disp_w, disp_h)
+
+    # ── Módulos ─────────────────────────────────────────────────────────────────
+    pose_module = MediaPipePoseModule(
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+        model_complexity=1,
+        smoothing=True,
+    )
+    predictor = IntentionPredictor(model_type=args.model_type)
+
+    # ── Vídeo de saída ───────────────────────────────────────────────────────────
+    video_out = None
+    if save_video:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_out = cv2.VideoWriter(
+            str(ROOT_DIR / f'{task}_camera_out.mp4'), fourcc, 8, (img_w, img_h)
+        )
+
+    # ── Estado ───────────────────────────────────────────────────────────────────
+    traj_queue      = []
+    intention_queue = []
+    old_intention   = None
+    frame_count     = 0
+    traj_save       = []
+    smoothed_probs  = None
+
+    # Estado persistente para o HUD (evita piscar entre predições)
+    last_diag        = None
+    last_motion_disp = 0.0
+    last_is_still    = False
+    last_intention   = 'aguardando...'
+    last_score       = 0.0
+
+    # Controle de FPS de processamento (hipótese H3)
+    last_proc_time  = 0.0
+    proc_interval   = (1.0 / proc_fps) if proc_fps > 0 else 0.0
+
+    fps_counter = 0
+    fps_start   = time.monotonic()
+    fps         = 0.0
+    proc_fps_real = 0.0
+    proc_count  = 0
+    proc_fps_start = time.monotonic()
+
+    # [ROS] rospy.init_node('intention_webcam', anonymous=True)
+    # [ROS] pub = rospy.Publisher('chatter', String, queue_size=10)
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print('Fim do stream de vídeo.')
+            break
+
+        # ── Estimativa de pose ───────────────────────────────────────────────────
+        body = pose_module.inference(frame)
+
+        if body and body.score > 0.5:
+            now = time.monotonic()
+
+            # H3 — Limitador de FPS de processamento
+            # Acumula landmarks mas só roda o modelo a cada proc_interval segundos.
+            upperbody = body.landmarks  # (15, 3) coords normalizadas
+
+            if len(traj_queue) >= seq_len:
+                traj_queue.pop(0)
+            traj_queue.append(upperbody)
+
+            traj_save.append(body)
+            frame_count += 1
+
+            intention   = None
+            is_still    = False
+            motion_disp = 0.0
+            diag        = None
+
+            # Só roda o modelo se passou o intervalo mínimo entre predições
+            if len(traj_queue) == seq_len and (now - last_proc_time) >= proc_interval:
+                last_proc_time = now
+                proc_count    += 1
+
+                poses = np.array(traj_queue)  # (seq_len, 15, 3)
+
+                # Pré-filtro de movimento: evita rodar o modelo em pose estática (Desabilitado pelo Marcos em 11/04/2026)
+                motion_disp = float(np.abs(np.diff(poses, axis=0)).mean())
+                if False: #motion_disp < STILLNESS_THRESHOLD:
+                    is_still  = True
+                    intention = 'no_action'
+                    smoothed_probs = None
+                else:
+                    # Pré-processamento idêntico ao Dataset.py e run.py
+                    poses_norm  = 2 * (poses - poses.min()) / (poses.max() - poses.min() + 1e-8)
+                    poses_world = camera_to_world(poses_norm, quat)  # H2: quat pode ser identidade
+                    poses_world[:, :, 2] -= poses_world[:, :, 2].min()
+
+                    inputs = torch.tensor(
+                        poses_world.reshape(1, seq_len, -1)
+                    ).float()
+
+                    # H1 / H4 — Diagnóstico: calcula métricas sem restrição
+                    if diag_mode:
+                        diag = compute_diag(predictor, inputs, poses)
+                        last_diag = diag
+
+                    _, pred_intention = predictor.predict(inputs, restrict=restrict)
+
+                    # Suavização exponencial das probabilidades (reduz flickering)
+                    n_classes = len(INTENTION_LIST)
+                    one_hot = np.zeros(n_classes, dtype=np.float32)
+                    one_hot[pred_intention[0].item()] = 1.0
+                    alpha = 0.4
+                    if smoothed_probs is None:
+                        smoothed_probs = one_hot
+                    else:
+                        smoothed_probs = alpha * one_hot + (1 - alpha) * smoothed_probs
+
+                    final_idx = int(smoothed_probs.argmax())
+                    intention = get_intention_name(final_idx)
+
+                    # Saída de diagnóstico no terminal
+                    if diag_mode and diag:
+                        probs_str = '  '.join(
+                            f'{CLASS_NAMES[i]}={diag["probs"][i]:.2f}'
+                            for i in range(len(CLASS_NAMES))
+                        )
+                        print(
+                            f'[frame {frame_count:04d}] '
+                            f'intenção={intention:<18} '
+                            f'entropia={diag["entropy"]:.3f}  '
+                            f'motion={motion_disp:.4f}  '
+                            f'qrot={"ON" if quat is None else "OFF"}  |  {probs_str}'
+                        )
+
+                # Persiste estado para o HUD (não pisca entre predições)
+                last_motion_disp = motion_disp
+                last_is_still    = is_still
+                if intention:
+                    last_intention = intention
+
+                # Janela de confirmação antes de enviar a intenção
+                if intention and intention != 'no_action' and not is_still:
+                    if len(intention_queue) < send_win:
+                        if not intention_queue or intention == intention_queue[-1]:
+                            intention_queue.append(intention)
+                        else:
+                            intention_queue = [intention]
+                    else:
+                        if intention == intention_queue[-1] and intention != old_intention:
+                            send_intention(intention)
+                            old_intention = intention
+                        intention_queue = []
+                else:
+                    intention_queue = []
+
+            # ── Esqueleto no frame original (para salvar) ─────────────────────
+            frame = pose_module.draw(frame, body)
+            last_score = body.score
+
+        else:
+            last_intention = 'sem pessoa detectada'
+            last_score     = 0.0
+
+        # Salva frame com esqueleto mas sem HUD (dados mais limpos)
+        if save_video and video_out:
+            video_out.write(frame)
+        elif body:
+            cv2.imwrite(str(img_dir / f'{frame_count}.png'), frame)
+
+        # ── HUD desenhado no display_frame (resolução ampliada → fontes nítidas) ─
+        if show:
+            display_frame = cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
+
+            qrot_label   = 'qrot:ON' if (quat is None) else 'qrot:OFF'
+            status_color = (0, 200, 0) if not last_is_still else (180, 180, 180)
+
+            # Linha de status no topo direito
+            cv2.putText(display_frame, f'fps:{fps:.1f}  {qrot_label}',
+                        (disp_w - 240, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                        (255, 255, 255), 1, cv2.LINE_AA)
+
+            if last_score == 0.0:
+                cv2.putText(display_frame, 'Nenhuma pessoa detectada',
+                            (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                            (0, 0, 255), 1, cv2.LINE_AA)
+            else:
+                # Rodapé com métricas (espaçamento de 34 px para legibilidade)
+                cv2.putText(display_frame, f'intention: {last_intention}',
+                            (10, disp_h - 118), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                            status_color, 1, cv2.LINE_AA)
+                cv2.putText(display_frame,
+                            f'motion: {last_motion_disp:.4f}  thresh: {STILLNESS_THRESHOLD}',
+                            (10, disp_h - 82), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (200, 200, 200), 1, cv2.LINE_AA)
+                cv2.putText(display_frame,
+                            f'frame: {frame_count}  proc_fps: {proc_fps_real:.1f}',
+                            (10, disp_h - 48), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(display_frame,
+                            f'score: {last_score:.2f}  restrict: {restrict}',
+                            (10, disp_h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (255, 255, 255), 1, cv2.LINE_AA)
+
+                # Painel de diagnóstico — usa last_diag (persiste entre predições)
+                if diag_mode and last_diag is not None:
+                    draw_diag_panel(
+                        display_frame, last_diag, last_motion_disp, last_is_still,
+                        qrot_active=(quat is None),
+                        proc_fps_target=proc_fps
+                    )
+
+            cv2.imshow('HRC Webcam', display_frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+        # Contadores de FPS
+        fps_counter += 1
+        now = time.monotonic()
+        if now - fps_start > 1.0:
+            fps = fps_counter / (now - fps_start)
+            fps_counter = 0
+            fps_start   = now
+        if now - proc_fps_start > 2.0:
+            proc_fps_real = proc_count / (now - proc_fps_start)
+            proc_count    = 0
+            proc_fps_start = now
+
+    # ── Limpeza ──────────────────────────────────────────────────────────────────
+    cap.release()
+    pose_module.close()
+    if video_out:
+        video_out.release()
+    cv2.destroyAllWindows()
+
+    with open(str(ROOT_DIR / f'{task}.pkl'), 'wb') as f:
+        pickle.dump(traj_save, f)
+    print(f'Trajetória salva em {ROOT_DIR}/{task}.pkl ({len(traj_save)} frames)')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Pipeline HRC com webcam (sem OAK-D) — versão de diagnóstico'
+    )
+
+    # ── Argumentos originais ────────────────────────────────────────────────────
+    parser.add_argument('--show', action='store_true',
+                        help='Exibir vídeo em tempo real')
+    parser.add_argument('--task', default='webcam001',
+                        help='Nome da tarefa (6 chars, 3 dígitos no final, ex: webcam001)')
+    parser.add_argument('--camera', type=int, default=0,
+                        help='Índice da câmera (0 = webcam integrada do notebook)')
+    parser.add_argument('--seq_len', type=int, default=5,
+                        help='Tamanho da janela de frames para predição')
+    parser.add_argument('--send_window', type=int, default=3,
+                        help='Intenção enviada após N confirmações consecutivas')
+    parser.add_argument('--restrict', type=str, default='ood',
+                        choices=['no', 'ood', 'working_area', 'all'],
+                        help=(
+                            'Modo de restrição. '
+                            '"ood" aplica filtro de entropia. '
+                            '"no" mostra predição bruta sem filtro (útil para diagnóstico).'
+                        ))
+    parser.add_argument('--model_type', type=str, default='final_intention',
+                        choices=['final_intention', 'final_traj'],
+                        help='Tipo de modelo de predição')
+    parser.add_argument('--video', action='store_true',
+                        help='Salvar saída como vídeo (padrão: salvar frames)')
+
+    # ── Argumentos de diagnóstico ───────────────────────────────────────────────
+    parser.add_argument('--diag', action='store_true',
+                        help=(
+                            '[H1/H4] Ativa modo de diagnóstico: exibe entropia, '
+                            'probabilidades por classe e estatísticas do eixo Z no terminal e '
+                            'no vídeo.'
+                        ))
+    parser.add_argument('--no_qrot', action='store_true',
+                        help=(
+                            '[H2] Desativa a rotação câmera→mundo (usa quaternion identidade). '
+                            'Testa se o quaternion calibrado para a OAK-D prejudica a webcam.'
+                        ))
+    parser.add_argument('--proc_fps', type=int, default=8,
+                        help=(
+                            '[H3] Limita o processamento do modelo a N fps (padrão: 8, '
+                            'igual à taxa usada no treino). Use 0 para sem limite.'
+                        ))
+    parser.add_argument('--replay', type=str, default=None,
+                        help=(
+                            '[H5] Caminho para um arquivo .pkl gravado com a OAK-D. '
+                            'Reproduz os landmarks reais sem câmera para verificar se o '
+                            'modelo funciona com dados de treino.'
+                        ))
+
+    args = parser.parse_args()
+
+    if args.replay:
+        run_replay(args)
+    else:
+        run_live(args)
