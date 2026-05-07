@@ -1,5 +1,7 @@
 # ignore files
 *.pbmm
 *.scorer
+webcam.py
 # ignore dirs
-
+human_traj/
+docs/.obsidian/

@@ -154,7 +154,7 @@ def draw_diag_panel(frame, diag, motion_disp, is_still, qrot_active, proc_fps_ta
         cv2.putText(frame, text, (panel_x, panel_y + row * line_h),
                     cv2.FONT_HERSHEY_SIMPLEX, fs, color, 1, cv2.LINE_AA)
 
-    put('=== DIAGNOSTICO ===', 0, (100, 255, 100))
+    put('--- DIAGNOSTICO ---', 0, (100, 255, 100))
     put(f'qrot: {"ON" if qrot_active else "OFF (identidade)"}', 1,
         (100, 200, 255) if qrot_active else (255, 150, 50))
     put(f'proc_fps_alvo: {proc_fps_target}', 2)
@@ -207,7 +207,7 @@ def run_replay(args):
 
     seq_len    = args.seq_len
     traj_queue = []
-    smoothed_probs = None
+    #smoothed_probs = None
     old_intention  = None
     intention_queue = []
 
@@ -292,7 +292,7 @@ def run_live(args):
     print(f'Câmera aberta: {img_w}x{img_h}')
 
     # ── Janela de exibição (criada uma vez para evitar piscar) ───────────────────
-    DISPLAY_SCALE = 1.6  # fator de ampliação para facilitar leitura
+    DISPLAY_SCALE = 2  # fator de ampliação para facilitar leitura
     disp_w = int(img_w * DISPLAY_SCALE)
     disp_h = int(img_h * DISPLAY_SCALE)
     if show:
@@ -322,7 +322,7 @@ def run_live(args):
     old_intention   = None
     frame_count     = 0
     traj_save       = []
-    smoothed_probs  = None
+    #smoothed_probs  = None
 
     # Estado persistente para o HUD (evita piscar entre predições)
     last_diag        = None
@@ -388,7 +388,7 @@ def run_live(args):
                     smoothed_probs = None
                 else:
                     # Pré-processamento idêntico ao Dataset.py e run.py
-                    poses_norm  = 2 * (poses - poses.min()) / (poses.max() - poses.min() + 1e-8)
+                    poses_norm  = 2 * (poses - poses.min()) / (poses.max() - poses.min())
                     poses_world = camera_to_world(poses_norm, quat)  # H2: quat pode ser identidade
                     poses_world[:, :, 2] -= poses_world[:, :, 2].min()
 
@@ -404,17 +404,19 @@ def run_live(args):
                     _, pred_intention = predictor.predict(inputs, restrict=restrict)
 
                     # Suavização exponencial das probabilidades (reduz flickering)
-                    n_classes = len(INTENTION_LIST)
-                    one_hot = np.zeros(n_classes, dtype=np.float32)
-                    one_hot[pred_intention[0].item()] = 1.0
-                    alpha = 0.4
-                    if smoothed_probs is None:
-                        smoothed_probs = one_hot
-                    else:
-                        smoothed_probs = alpha * one_hot + (1 - alpha) * smoothed_probs
+                    #n_classes = len(INTENTION_LIST)
+                    #one_hot = np.zeros(n_classes, dtype=np.float32)
+                    #one_hot[pred_intention[0].item()] = 1.0
+                    #alpha = 0.4
+                    #if smoothed_probs is None:
+                    #    smoothed_probs = one_hot
+                    #else:
+                    #    smoothed_probs = alpha * one_hot + (1 - alpha) * smoothed_probs
 
-                    final_idx = int(smoothed_probs.argmax())
-                    intention = get_intention_name(final_idx)
+                    #final_idx = int(smoothed_probs.argmax())
+                    #intention = get_intention_name(final_idx)
+                    
+                    intention = get_intention_name(pred_intention[0].item())
 
                     # Saída de diagnóstico no terminal
                     if diag_mode and diag:
