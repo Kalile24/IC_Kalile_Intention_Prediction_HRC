@@ -154,6 +154,12 @@ def camera_fourcc_string(cap):
     return text if text.strip() else '----'
 
 
+def overlay_scale(frame):
+    """Escala HUD/painéis para resoluções maiores sem exagerar em 480p."""
+    h = frame.shape[0]
+    return float(np.clip(h / 900.0, 1.0, 1.8))
+
+
 def _camera_candidate_is_valid(cap):
     """Confirma que a câmera abriu e realmente entrega frames."""
     if not cap.isOpened():
@@ -250,22 +256,29 @@ def draw_diag_panel(frame, diag, motion_disp, is_still, qrot_active, proc_fps_ta
     Desenhado sobre o display_frame (já ampliado) para fontes nítidas.
     """
     h, w = frame.shape[:2]
-    line_h   = 28
-    fs       = 0.58   # font scale
+    scale    = overlay_scale(frame)
+    margin   = int(8 * scale)
+    pad      = int(8 * scale)
+    line_h   = int(28 * scale)
+    fs       = 0.58 * scale
+    thick    = max(1, int(round(scale)))
     n_rows   = len(CLASS_NAMES) + 8
-    panel_w  = 420
-    panel_x  = w - panel_w - 8
-    panel_y  = 10
+    panel_w  = int(420 * scale)
+    panel_x  = w - panel_w - margin
+    panel_y  = int(10 * scale)
+    bar_x    = panel_x + int(250 * scale)
+    bar_h    = max(8, int(10 * scale))
+    bar_w    = int(130 * scale)
 
     # Fundo opaco — sem addWeighted para evitar piscar
     cv2.rectangle(frame,
-                  (panel_x - 6, panel_y - 6),
-                  (w - 4, panel_y + line_h * n_rows + 4),
+                  (panel_x - pad, panel_y - pad),
+                  (w - margin // 2, panel_y + line_h * n_rows + pad),
                   (20, 20, 20), -1)
 
     def put(text, row, color=(220, 220, 220)):
         cv2.putText(frame, text, (panel_x, panel_y + row * line_h),
-                    cv2.FONT_HERSHEY_SIMPLEX, fs, color, 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, fs, color, thick, cv2.LINE_AA)
 
     put('--- DIAGNOSTICO ---', 0, (100, 255, 100))
     put(f'qrot: {"ON" if qrot_active else "OFF (identidade)"}', 1,
@@ -281,13 +294,13 @@ def draw_diag_panel(frame, diag, motion_disp, is_still, qrot_active, proc_fps_ta
     max_prob = float(max(diag['probs']))
     for i, name in enumerate(CLASS_NAMES):
         prob = float(diag['probs'][i])
-        bar_len = int(prob * 110)
+        bar_len = int(prob * bar_w)
         bar_color = (0, 200, 0) if prob == max_prob else (100, 100, 200)
         put(f'{name[:14]:<14} {prob:.2f}', 6 + i)
         bar_y = panel_y + (6 + i) * line_h
         cv2.rectangle(frame,
-                      (panel_x + 250, bar_y - 14),
-                      (panel_x + 250 + bar_len, bar_y - 4),
+                      (bar_x, bar_y - bar_h - int(4 * scale)),
+                      (bar_x + bar_len, bar_y - int(4 * scale)),
                       bar_color, -1)
 
     row = 6 + len(CLASS_NAMES)
@@ -589,36 +602,46 @@ def run_live(args):
         # ── HUD desenhado no display_frame (resolução ampliada → fontes nítidas) ─
         if show:
             display_frame = cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
+            hud_scale = overlay_scale(display_frame)
+            hud_margin = int(10 * hud_scale)
+            hud_line = int(34 * hud_scale)
+            hud_thick = max(1, int(round(hud_scale)))
 
             qrot_label   = 'qrot:ON' if (quat is None) else 'qrot:OFF'
             status_color = (0, 200, 0) if not last_is_still else (180, 180, 180)
 
             # Linha de status no topo direito
             cv2.putText(display_frame, f'fps:{fps:.1f}  {qrot_label}',
-                        (disp_w - 240, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
-                        (255, 255, 255), 1, cv2.LINE_AA)
+                        (disp_w - int(245 * hud_scale), int(30 * hud_scale)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65 * hud_scale,
+                        (255, 255, 255), hud_thick, cv2.LINE_AA)
 
             if last_score == 0.0:
                 cv2.putText(display_frame, 'Nenhuma pessoa detectada',
-                            (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                            (0, 0, 255), 1, cv2.LINE_AA)
+                            (hud_margin, int(55 * hud_scale)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9 * hud_scale,
+                            (0, 0, 255), hud_thick, cv2.LINE_AA)
             else:
                 # Rodapé com métricas (espaçamento de 34 px para legibilidade)
                 cv2.putText(display_frame, f'intention: {last_intention}',
-                            (10, disp_h - 118), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
-                            status_color, 1, cv2.LINE_AA)
+                            (hud_margin, disp_h - hud_line * 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.75 * hud_scale,
+                            status_color, hud_thick, cv2.LINE_AA)
                 cv2.putText(display_frame,
                             f'motion: {last_motion_disp:.4f}  thresh: {STILLNESS_THRESHOLD}',
-                            (10, disp_h - 82), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                            (200, 200, 200), 1, cv2.LINE_AA)
+                            (hud_margin, disp_h - hud_line * 3),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6 * hud_scale,
+                            (200, 200, 200), hud_thick, cv2.LINE_AA)
                 cv2.putText(display_frame,
                             f'frame: {frame_count}  proc_fps: {proc_fps_real:.1f}',
-                            (10, disp_h - 48), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                            (255, 255, 255), 1, cv2.LINE_AA)
+                            (hud_margin, disp_h - hud_line * 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6 * hud_scale,
+                            (255, 255, 255), hud_thick, cv2.LINE_AA)
                 cv2.putText(display_frame,
                             f'score: {last_score:.2f}  restrict: {restrict}',
-                            (10, disp_h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                            (255, 255, 255), 1, cv2.LINE_AA)
+                            (hud_margin, disp_h - hud_margin),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6 * hud_scale,
+                            (255, 255, 255), hud_thick, cv2.LINE_AA)
 
                 # Painel de diagnóstico — usa last_diag (persiste entre predições)
                 if diag_mode and last_diag is not None:
@@ -681,8 +704,8 @@ if __name__ == '__main__':
                         help='Altura solicitada para captura. Use 0 para manter o padrão do driver.')
     parser.add_argument('--cam_fps', type=int, default=30,
                         help='FPS solicitado para captura. Use 0 para manter o padrão do driver.')
-    parser.add_argument('--cam_fourcc', type=str, default='MJPG',
-                        help='Formato solicitado ao driver, ex: MJPG ou YUYV. MJPG reduz banda USB.')
+    parser.add_argument('--cam_fourcc', type=str, default='H264',
+                        help='Formato solicitado ao driver, ex: H264, MJPG ou YUYV. H264 reduz banda USB em webcams compatíveis.')
     parser.add_argument('--camera_buffer', type=int, default=1,
                         help='Tamanho do buffer de captura. 1 reduz latência e frames antigos.')
     parser.add_argument('--seq_len', type=int, default=5,
