@@ -117,6 +117,17 @@ def list_video_devices():
     return sorted(str(path) for path in Path('/dev').glob('video*'))
 
 
+def _camera_candidate_is_valid(cap):
+    """Confirma que a câmera abriu e realmente entrega frames."""
+    if not cap.isOpened():
+        return False
+    for _ in range(3):
+        ret, frame = cap.read()
+        if ret and frame is not None and frame.size > 0:
+            return True
+    return False
+
+
 def open_camera(camera_arg):
     """
     Abre câmera por índice, caminho ou auto-detecção.
@@ -133,7 +144,7 @@ def open_camera(camera_arg):
                 continue
             seen.add(key)
             cap = cv2.VideoCapture(candidate)
-            if cap.isOpened():
+            if _camera_candidate_is_valid(cap):
                 return cap, candidate
             cap.release()
         return cv2.VideoCapture(-1), 'auto'
@@ -609,8 +620,8 @@ if __name__ == '__main__':
                         help='Exibir vídeo em tempo real')
     parser.add_argument('--task', default='webcam001',
                         help='Nome da tarefa (6 chars, 3 dígitos no final, ex: webcam001)')
-    parser.add_argument('--camera', type=str, default='0',
-                        help='Índice/caminho da câmera (ex: 0, /dev/video2, auto)')
+    parser.add_argument('--camera', type=str, default='auto',
+                        help='Fonte da câmera: auto, índice ou caminho (ex: auto, 0, /dev/video2)')
     parser.add_argument('--seq_len', type=int, default=5,
                         help='Tamanho da janela de frames para predição')
     parser.add_argument('--send_window', type=int, default=3,
