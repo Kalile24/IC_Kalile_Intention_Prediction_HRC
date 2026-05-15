@@ -55,6 +55,7 @@ class MediaPipePoseModule:
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
         )
+        self._last_pose_landmarks = None
 
     def inference(self, frame_bgr):
         """
@@ -69,6 +70,7 @@ class MediaPipePoseModule:
         """
         frame_rgb = frame_bgr[:, :, ::-1]
         results = self.pose.process(frame_rgb)
+        self._last_pose_landmarks = results.pose_landmarks
 
         if not results.pose_landmarks:
             return None
@@ -96,18 +98,14 @@ class MediaPipePoseModule:
 
     def draw(self, frame_bgr, body):
         """Desenha o esqueleto no frame (compatível com BlazeposeRenderer.draw)."""
-        if body is None:
+        if body is None or self._last_pose_landmarks is None:
             return frame_bgr
-        frame_rgb = frame_bgr[:, :, ::-1].copy()
-        # Roda nova inferência apenas para desenho (sem custo extra — já foi processado)
-        results = self.pose.process(frame_rgb)
-        if results.pose_landmarks:
-            mp_drawing.draw_landmarks(
-                frame_bgr,
-                results.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
-            )
+        mp_drawing.draw_landmarks(
+            frame_bgr,
+            self._last_pose_landmarks,
+            mp_pose.POSE_CONNECTIONS,
+            landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
+        )
         return frame_bgr
 
     def close(self):

@@ -98,6 +98,62 @@ def send_intention(intention_name):
     # [ROS] pub.publish(intention_name)
 
 
+def parse_camera_source(camera_arg):
+    """
+    Converte --camera para uma fonte aceita pelo OpenCV.
+    Exemplos: "0" -> 0, "/dev/video2" -> "/dev/video2", "auto" -> auto-detectar.
+    """
+    camera_arg = str(camera_arg).strip()
+    if camera_arg.lower() == 'auto':
+        return 'auto'
+    try:
+        return int(camera_arg)
+    except ValueError:
+        return camera_arg
+
+
+def list_video_devices():
+    """Lista dispositivos Linux /dev/video* visíveis no sistema."""
+    return sorted(str(path) for path in Path('/dev').glob('video*'))
+
+
+def open_camera(camera_arg):
+    """
+    Abre câmera por índice, caminho ou auto-detecção.
+    Retorna (cap, source_usada). Se falhar, cap vem fechado.
+    """
+    source = parse_camera_source(camera_arg)
+
+    if source == 'auto':
+        candidates = list_video_devices() + list(range(10))
+        seen = set()
+        for candidate in candidates:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            cap = cv2.VideoCapture(candidate)
+            if cap.isOpened():
+                return cap, candidate
+            cap.release()
+        return cv2.VideoCapture(-1), 'auto'
+
+    return cv2.VideoCapture(source), source
+
+
+def print_camera_error(camera_source):
+    devices = list_video_devices()
+    print(f'Erro: não foi possível abrir a câmera {camera_source}')
+    if devices:
+        print('Dispositivos de vídeo encontrados:')
+        for device in devices:
+            print(f'  - {device}')
+        print('Tente executar com, por exemplo: --camera /dev/video0 ou --camera auto')
+    else:
+        print('Nenhum dispositivo /dev/video* foi encontrado.')
+        print('Verifique se a webcam está conectada, liberada para este ambiente e se o usuário tem permissão de vídeo.')
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Bloco de diagnóstico
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,8 +324,9 @@ def run_live(args):
     seq_len    = args.seq_len
     send_win   = args.send_window
     restrict   = args.restrict
-    camera_id  = args.camera
+    camera_arg = args.camera
     save_video = args.video
+    save_frames = args.save_frames
     diag_mode  = args.diag
     quat       = _IDENTITY_Q if args.no_qrot else None
     proc_fps   = args.proc_fps   # alvo de FPS de processamento (0 = sem limite)
@@ -277,19 +334,20 @@ def run_live(args):
     ROOT_DIR = FILE_DIR / 'human_traj' / task[:-3]
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     img_dir = ROOT_DIR / f'images{task[-3:]}'
-    if img_dir.exists():
+    if save_frames and img_dir.exists():
         import shutil
         shutil.rmtree(img_dir)
-    img_dir.mkdir()
+    if save_frames:
+        img_dir.mkdir()
 
     # ── Câmera ──────────────────────────────────────────────────────────────────
-    cap = cv2.VideoCapture(camera_id)
+    cap, camera_source = open_camera(camera_arg)
     if not cap.isOpened():
-        print(f'Erro: não foi possível abrir a câmera {camera_id}')
+        print_camera_error(camera_source)
         return
     img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f'Câmera aberta: {img_w}x{img_h}')
+    print(f'Câmera aberta ({camera_source}): {img_w}x{img_h}')
 
     # ── Janela de exibição (criada uma vez para evitar piscar) ───────────────────
     DISPLAY_SCALE = 2  # fator de ampliação para facilitar leitura
@@ -388,7 +446,7 @@ def run_live(args):
                     smoothed_probs = None
                 else:
                     # Pré-processamento idêntico ao Dataset.py e run.py
-                    poses_norm  = 2 * (poses - poses.min()) / (poses.max() - poses.min())
+                    poses_norm  = 2 * (poses - poses.min()) / (poses.max() - poses.min() + 1e-8)
                     poses_world = camera_to_world(poses_norm, quat)  # H2: quat pode ser identidade
                     poses_world[:, :, 2] -= poses_world[:, :, 2].min()
 
@@ -464,7 +522,7 @@ def run_live(args):
         # Salva frame com esqueleto mas sem HUD (dados mais limpos)
         if save_video and video_out:
             video_out.write(frame)
-        elif body:
+        elif save_frames and body:
             cv2.imwrite(str(img_dir / f'{frame_count}.png'), frame)
 
         # ── HUD desenhado no display_frame (resolução ampliada → fontes nítidas) ─
@@ -551,8 +609,8 @@ if __name__ == '__main__':
                         help='Exibir vídeo em tempo real')
     parser.add_argument('--task', default='webcam001',
                         help='Nome da tarefa (6 chars, 3 dígitos no final, ex: webcam001)')
-    parser.add_argument('--camera', type=int, default=0,
-                        help='Índice da câmera (0 = webcam integrada do notebook)')
+    parser.add_argument('--camera', type=str, default='0',
+                        help='Índice/caminho da câmera (ex: 0, /dev/video2, auto)')
     parser.add_argument('--seq_len', type=int, default=5,
                         help='Tamanho da janela de frames para predição')
     parser.add_argument('--send_window', type=int, default=3,
@@ -568,7 +626,9 @@ if __name__ == '__main__':
                         choices=['final_intention', 'final_traj'],
                         help='Tipo de modelo de predição')
     parser.add_argument('--video', action='store_true',
-                        help='Salvar saída como vídeo (padrão: salvar frames)')
+                        help='Salvar saída como vídeo')
+    parser.add_argument('--save_frames', action='store_true',
+                        help='Salvar cada frame com esqueleto como PNG. Desativado por padrão para evitar travamentos no vídeo ao vivo.')
 
     # ── Argumentos de diagnóstico ───────────────────────────────────────────────
     parser.add_argument('--diag', action='store_true',
