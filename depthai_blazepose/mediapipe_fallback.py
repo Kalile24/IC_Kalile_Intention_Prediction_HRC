@@ -10,6 +10,7 @@ Interface compatível com o pipeline original de run.py:
 """
 
 import numpy as np
+import cv2
 import mediapipe as mp
 
 # Índices MediaPipe que correspondem aos 15 joints do sistema original
@@ -68,7 +69,12 @@ class MediaPipePoseModule:
             FakeBody com landmarks de 15 joints do corpo superior, ou None
             se nenhuma pessoa for detectada.
         """
-        frame_rgb = frame_bgr[:, :, ::-1]
+        if frame_bgr.ndim == 2:
+            frame_bgr = cv2.cvtColor(frame_bgr, cv2.COLOR_GRAY2BGR)
+        elif frame_bgr.ndim == 3 and frame_bgr.shape[2] == 4:
+            frame_bgr = cv2.cvtColor(frame_bgr, cv2.COLOR_BGRA2BGR)
+
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         results = self.pose.process(frame_rgb)
         self._last_pose_landmarks = results.pose_landmarks
 

@@ -137,6 +137,7 @@ def configure_camera(cap, width, height, fps, fourcc, buffer_size):
     fourcc = str(fourcc).strip().upper()
     if len(fourcc) == 4:
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+    cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)
     if width > 0:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     if height > 0:
@@ -154,6 +155,17 @@ def camera_fourcc_string(cap):
     return text if text.strip() else '----'
 
 
+def ensure_bgr_frame(frame):
+    """Garante frame BGR de 3 canais para MediaPipe, desenho e HUD."""
+    if frame is None:
+        return None
+    if frame.ndim == 2:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.ndim == 3 and frame.shape[2] == 4:
+        return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+    return frame
+
+
 def overlay_scale(frame):
     """Escala HUD/painéis para resoluções maiores sem exagerar em 480p."""
     h = frame.shape[0]
@@ -166,6 +178,7 @@ def _camera_candidate_is_valid(cap):
         return False
     for _ in range(3):
         ret, frame = cap.read()
+        frame = ensure_bgr_frame(frame)
         if ret and frame is not None and frame.size > 0:
             return True
     return False
@@ -482,6 +495,10 @@ def run_live(args):
         if not ret:
             print('Fim do stream de vídeo.')
             break
+        frame = ensure_bgr_frame(frame)
+        if frame is None:
+            print('Frame vazio recebido da câmera.')
+            continue
 
         # ── Estimativa de pose ───────────────────────────────────────────────────
         body = pose_module.inference(frame)
