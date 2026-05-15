@@ -19,8 +19,31 @@ import mediapipe as mp
 UPPER_BODY_MP_INDICES = list(range(11, 25)) + [0]  # 14 joints + nariz = 15
 
 mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
+
+# Visualização compacta, próxima ao esqueleto usado no paper:
+# torso + braços, sem face, mãos completas ou caixa de coordenadas.
+DISPLAY_JOINTS = {
+    'left_shoulder': 11,
+    'right_shoulder': 12,
+    'left_elbow': 13,
+    'right_elbow': 14,
+    'left_wrist': 15,
+    'right_wrist': 16,
+    'left_hip': 23,
+    'right_hip': 24,
+}
+TORSO_CONNECTIONS = [
+    ('left_shoulder', 'right_shoulder'),
+    ('right_shoulder', 'right_hip'),
+    ('right_hip', 'left_hip'),
+    ('left_hip', 'left_shoulder'),
+]
+ARM_CONNECTIONS = [
+    ('left_shoulder', 'left_elbow'),
+    ('left_elbow', 'left_wrist'),
+    ('right_shoulder', 'right_elbow'),
+    ('right_elbow', 'right_wrist'),
+]
 
 
 class FakeBody:
@@ -106,12 +129,34 @@ class MediaPipePoseModule:
         """Desenha o esqueleto no frame (compatível com BlazeposeRenderer.draw)."""
         if body is None or self._last_pose_landmarks is None:
             return frame_bgr
-        mp_drawing.draw_landmarks(
-            frame_bgr,
-            self._last_pose_landmarks,
-            mp_pose.POSE_CONNECTIONS,
-            landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
-        )
+
+        h, w = frame_bgr.shape[:2]
+        lms = self._last_pose_landmarks.landmark
+
+        def point(name, min_visibility=0.45):
+            lm = lms[DISPLAY_JOINTS[name]]
+            if lm.visibility < min_visibility:
+                return None
+            return int(lm.x * w), int(lm.y * h)
+
+        points = {name: point(name) for name in DISPLAY_JOINTS}
+
+        def draw_connection(start, end, color, thickness=3):
+            p1 = points.get(start)
+            p2 = points.get(end)
+            if p1 is not None and p2 is not None:
+                cv2.line(frame_bgr, p1, p2, color, thickness, cv2.LINE_AA)
+
+        for start, end in TORSO_CONNECTIONS:
+            draw_connection(start, end, (255, 80, 0), 3)  # azul
+        for start, end in ARM_CONNECTIONS:
+            draw_connection(start, end, (0, 0, 255), 3)   # vermelho
+
+        for p in points.values():
+            if p is not None:
+                cv2.circle(frame_bgr, p, 5, (0, 220, 0), -1, cv2.LINE_AA)
+                cv2.circle(frame_bgr, p, 7, (0, 80, 0), 1, cv2.LINE_AA)
+
         return frame_bgr
 
     def close(self):
