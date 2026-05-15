@@ -117,6 +117,43 @@ def list_video_devices():
     return sorted(str(path) for path in Path('/dev').glob('video*'))
 
 
+def camera_backend_id(name):
+    """Mapeia nome de backend para constante OpenCV."""
+    name = str(name).lower()
+    if name == 'v4l2':
+        return cv2.CAP_V4L2
+    return cv2.CAP_ANY
+
+
+def open_video_capture(source, backend):
+    backend_id = camera_backend_id(backend)
+    if backend_id == cv2.CAP_ANY:
+        return cv2.VideoCapture(source)
+    return cv2.VideoCapture(source, backend_id)
+
+
+def configure_camera(cap, width, height, fps, fourcc, buffer_size):
+    """Solicita formato/resolução ao driver antes da primeira leitura real."""
+    fourcc = str(fourcc).strip().upper()
+    if len(fourcc) == 4:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+    if width > 0:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    if height > 0:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    if fps > 0:
+        cap.set(cv2.CAP_PROP_FPS, fps)
+    if buffer_size > 0:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
+
+
+def camera_fourcc_string(cap):
+    fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+    chars = [chr((fourcc >> 8 * i) & 0xFF) for i in range(4)]
+    text = ''.join(chars)
+    return text if text.strip() else '----'
+
+
 def _camera_candidate_is_valid(cap):
     """Confirma que a câmera abriu e realmente entrega frames."""
     if not cap.isOpened():
@@ -128,12 +165,12 @@ def _camera_candidate_is_valid(cap):
     return False
 
 
-def open_camera(camera_arg):
+def open_camera(args):
     """
     Abre câmera por índice, caminho ou auto-detecção.
     Retorna (cap, source_usada). Se falhar, cap vem fechado.
     """
-    source = parse_camera_source(camera_arg)
+    source = parse_camera_source(args.camera)
 
     if source == 'auto':
         candidates = list_video_devices() + list(range(10))
@@ -143,13 +180,22 @@ def open_camera(camera_arg):
             if key in seen:
                 continue
             seen.add(key)
-            cap = cv2.VideoCapture(candidate)
+            cap = open_video_capture(candidate, args.capture_backend)
+            configure_camera(
+                cap, args.cam_width, args.cam_height, args.cam_fps,
+                args.cam_fourcc, args.camera_buffer
+            )
             if _camera_candidate_is_valid(cap):
                 return cap, candidate
             cap.release()
-        return cv2.VideoCapture(-1), 'auto'
+        return open_video_capture(-1, args.capture_backend), 'auto'
 
-    return cv2.VideoCapture(source), source
+    cap = open_video_capture(source, args.capture_backend)
+    configure_camera(
+        cap, args.cam_width, args.cam_height, args.cam_fps,
+        args.cam_fourcc, args.camera_buffer
+    )
+    return cap, source
 
 
 def print_camera_error(camera_source):
@@ -335,7 +381,6 @@ def run_live(args):
     seq_len    = args.seq_len
     send_win   = args.send_window
     restrict   = args.restrict
-    camera_arg = args.camera
     save_video = args.video
     save_frames = args.save_frames
     diag_mode  = args.diag
@@ -352,13 +397,18 @@ def run_live(args):
         img_dir.mkdir()
 
     # ── Câmera ──────────────────────────────────────────────────────────────────
-    cap, camera_source = open_camera(camera_arg)
+    cap, camera_source = open_camera(args)
     if not cap.isOpened():
         print_camera_error(camera_source)
         return
     img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f'Câmera aberta ({camera_source}): {img_w}x{img_h}')
+    cam_fps = cap.get(cv2.CAP_PROP_FPS)
+    cam_fourcc = camera_fourcc_string(cap)
+    print(
+        f'Câmera aberta ({camera_source}): {img_w}x{img_h} '
+        f'@ {cam_fps:.1f} fps  fourcc={cam_fourcc}  backend={args.capture_backend}'
+    )
 
     # ── Janela de exibição (criada uma vez para evitar piscar) ───────────────────
     DISPLAY_SCALE = 2  # fator de ampliação para facilitar leitura
@@ -622,6 +672,19 @@ if __name__ == '__main__':
                         help='Nome da tarefa (6 chars, 3 dígitos no final, ex: webcam001)')
     parser.add_argument('--camera', type=str, default='auto',
                         help='Fonte da câmera: auto, índice ou caminho (ex: auto, 0, /dev/video2)')
+    parser.add_argument('--capture_backend', type=str, default='v4l2',
+                        choices=['v4l2', 'any'],
+                        help='Backend de captura OpenCV. Em Linux, v4l2 costuma ser mais estável para webcams USB.')
+    parser.add_argument('--cam_width', type=int, default=1280,
+                        help='Largura solicitada para captura. Use 0 para manter o padrão do driver.')
+    parser.add_argument('--cam_height', type=int, default=720,
+                        help='Altura solicitada para captura. Use 0 para manter o padrão do driver.')
+    parser.add_argument('--cam_fps', type=int, default=30,
+                        help='FPS solicitado para captura. Use 0 para manter o padrão do driver.')
+    parser.add_argument('--cam_fourcc', type=str, default='MJPG',
+                        help='Formato solicitado ao driver, ex: MJPG ou YUYV. MJPG reduz banda USB.')
+    parser.add_argument('--camera_buffer', type=int, default=1,
+                        help='Tamanho do buffer de captura. 1 reduz latência e frames antigos.')
     parser.add_argument('--seq_len', type=int, default=5,
                         help='Tamanho da janela de frames para predição')
     parser.add_argument('--send_window', type=int, default=3,
