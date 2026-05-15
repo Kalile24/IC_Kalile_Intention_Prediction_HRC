@@ -721,8 +721,8 @@ if __name__ == '__main__':
                         help='Altura solicitada para captura. Use 0 para manter o padrão do driver.')
     parser.add_argument('--cam_fps', type=int, default=30,
                         help='FPS solicitado para captura. Use 0 para manter o padrão do driver.')
-    parser.add_argument('--cam_fourcc', type=str, default='H264',
-                        help='Formato solicitado ao driver, ex: H264, MJPG ou YUYV. H264 reduz banda USB em webcams compatíveis.')
+    parser.add_argument('--cam_fourcc', type=str, default='MJPG',
+                        help='Formato solicitado ao driver, ex: MJPG, H264 ou YUYV. MJPG reduz banda USB em webcams compatíveis.')
     parser.add_argument('--camera_buffer', type=int, default=1,
                         help='Tamanho do buffer de captura. 1 reduz latência e frames antigos.')
     parser.add_argument('--seq_len', type=int, default=5,
