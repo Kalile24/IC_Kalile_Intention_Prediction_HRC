@@ -39,6 +39,17 @@ Quatro novos argumentos adicionados, com fidelidade total ao pré-processamento 
 | `--proc_fps N` | H3 | Limita o modelo a rodar N vezes por segundo (padrão `8`, igual ao treino). O MediaPipe continua rodando em todo frame. |
 | `--replay PKL` | H5 | Carrega um `.pkl` da OAK-D e itera pelos landmarks reais sem câmera. |
 
+No branch `webcam-runtime-optimizations`, o runtime ao vivo também foi endurecido para
+uso com webcam USB:
+
+| Recurso | Comportamento |
+|---------|---------------|
+| `--camera auto` | Procura fontes `/dev/video*` e índices OpenCV comuns até encontrar uma câmera que entregue frames. |
+| `--capture_backend v4l2` | Usa V4L2 por padrão no Linux para reduzir inconsistências de abertura da câmera. |
+| `--cam_fourcc MJPG` | Solicita MJPEG para reduzir banda USB em webcams compatíveis. |
+| `--camera_buffer 1` | Mantém o buffer pequeno para reduzir latência e frames antigos. |
+| Normalização BGR | Converte frames cinza/BGRA para BGR antes do MediaPipe, desenho do esqueleto e HUD. |
+
 O pré-processamento permanece **idêntico** ao `run.py` e `Dataset.py`:
 ```python
 poses_norm  = 2 * (poses - poses.min()) / (poses.max() - poses.min() + 1e-8)

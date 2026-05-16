@@ -66,6 +66,12 @@ ROS installation.
 # Basic run
 python run_webcam.py --show --task webcam001
 
+# Let the script find the first usable /dev/video* source
+python run_webcam.py --show --task webcam001 --camera auto
+
+# Force a specific device and camera format
+python run_webcam.py --show --task webcam001 --camera /dev/video0 --cam_fourcc MJPG
+
 # Full diagnostics at training FPS
 python run_webcam.py --show --task webcam001 --diag --proc_fps 8
 
@@ -85,7 +91,13 @@ python run_webcam.py --show --task webcam001 --restrict no
 |----------|---------|---------|
 | `--show` | off | Display video window |
 | `--task` | `webcam001` | Task ID (6-char, 3-digit suffix) |
-| `--camera` | 0 | OpenCV camera index |
+| `--camera` | `auto` | OpenCV camera source: auto-detect, numeric index, or `/dev/video*` path |
+| `--capture_backend` | `v4l2` | OpenCV capture backend (`v4l2` on Linux, or `any`) |
+| `--cam_width` | 1280 | Requested capture width (`0` keeps driver default) |
+| `--cam_height` | 720 | Requested capture height (`0` keeps driver default) |
+| `--cam_fps` | 30 | Requested camera FPS (`0` keeps driver default) |
+| `--cam_fourcc` | `MJPG` | Requested camera format (`MJPG`, `H264`, `YUYV`, etc.) |
+| `--camera_buffer` | 1 | Capture buffer size; lower values reduce latency and stale frames |
 | `--seq_len` | 5 | Frames in the prediction window |
 | `--send_window` | 3 | Confirmations before forwarding intention |
 | `--restrict` | `ood` | `no` / `ood` / `working_area` / `all` |
@@ -146,6 +158,24 @@ Terminal output per frame with `--diag`:
 ```
 [frame 0042] intention=get_connectors   entropy=0.312  motion=0.0231  qrot=ON  |  no_action=0.05  get_connectors=0.81  get_screws=0.09  get_wheels=0.05
 ```
+
+---
+
+## Runtime Optimizations on `webcam-runtime-optimizations`
+
+This branch keeps the diagnostic behavior above and adds webcam runtime hardening:
+
+- **Automatic camera discovery:** `--camera auto` scans `/dev/video*` sources and common
+  numeric indices, then keeps the first source that actually returns frames.
+- **Linux-friendly capture path:** `--capture_backend v4l2` is the default because it is
+  usually more stable for USB webcams on Ubuntu.
+- **Lower USB bandwidth by default:** `--cam_fourcc MJPG` requests MJPEG from compatible
+  cameras. `H264` and `YUYV` are still available for comparison.
+- **Lower live latency:** `--camera_buffer 1` reduces queued stale frames.
+- **Frame normalization before processing:** grayscale and BGRA frames are converted to
+  3-channel BGR before MediaPipe, drawing, and the diagnostic HUD.
+- **Readable high-resolution HUD:** diagnostic overlays scale with frame height so the
+  panel stays legible at 720p and higher.
 
 ---
 

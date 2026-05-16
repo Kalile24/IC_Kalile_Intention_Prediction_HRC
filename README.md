@@ -1,11 +1,14 @@
 # Robustifying Long-term Human-Robot Collaboration through a Hierarchical and Multimodal Framework
 
 > **Note — this is a testing fork.**
-> This branch (`webcam-inference-testing`) is part of an undergraduate research project (IC)
+> This branch (`webcam-runtime-optimizations`) is part of an undergraduate research project (IC)
 > by [Marcos Kalile](https://github.com/Kalile24), a student at IME (Instituto Militar de Engenharia).
 > The goal is to evaluate and stress-test the **intention prediction module** of the original
 > framework under conditions without the OAK-D Lite camera, using a standard USB webcam and
-> MediaPipe Pose as a drop-in replacement.
+> MediaPipe Pose as a drop-in replacement. The current runtime also includes webcam
+> capture defaults tuned for Linux/OpenCV: automatic camera discovery, V4L2 capture,
+> MJPG as the default camera format, a small capture buffer, and BGR frame normalization
+> before MediaPipe and the diagnostic HUD.
 >
 > The `original` branch preserves the upstream code untouched.
 > See [CHANGES.md](CHANGES.md) for a detailed description of what was added and why.
@@ -81,6 +84,5 @@ python speech/speech_recognize.py # open the speech recognition program and comm
   year={2024}
 }
 ```
-
 
 

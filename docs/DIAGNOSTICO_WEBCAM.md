@@ -28,6 +28,38 @@ python -c "import cv2, mediapipe, torch; print('OK')"
 
 ---
 
+## Configuração de captura no branch `webcam-runtime-optimizations`
+
+O branch atual mantém o diagnóstico original e adiciona ajustes de runtime para tornar a
+webcam mais estável no Linux:
+
+| Opção | Padrão | Quando alterar |
+|-------|--------|----------------|
+| `--camera` | `auto` | Use `/dev/video0`, `/dev/video2` ou um índice se quiser fixar a fonte manualmente |
+| `--capture_backend` | `v4l2` | Use `any` se o backend V4L2 não abrir sua câmera |
+| `--cam_width` / `--cam_height` | `1280x720` | Use `0` para aceitar o padrão do driver |
+| `--cam_fps` | `30` | Use `0` para aceitar o padrão do driver |
+| `--cam_fourcc` | `MJPG` | Teste `H264` ou `YUYV` se a câmera não entregar frames em MJPG |
+| `--camera_buffer` | `1` | Aumente apenas se houver instabilidade de captura |
+
+Comando recomendado para iniciar o teste:
+
+```bash
+python run_webcam.py --show --task diag001 --diag --proc_fps 8 --restrict ood
+```
+
+Se a câmera não abrir, o script lista os dispositivos `/dev/video*` encontrados. Nesse
+caso, force uma fonte específica:
+
+```bash
+python run_webcam.py --show --task diag001 --camera /dev/video0 --diag
+```
+
+O pipeline também normaliza frames para BGR antes do MediaPipe e do HUD. Isso evita falhas
+quando o driver entrega frames em escala de cinza ou BGRA.
+
+---
+
 ## H1 — A entrada está fora da distribuição de treino?
 
 **Diagnóstico:** O modelo foi treinado com profundidade Z real (câmera estéreo). A webcam fornece Z estimado por rede neural, que tem distribuição diferente. Quando a entrada está muito fora do treino, a distribuição de probabilidades do modelo fica uniforme — alta entropia.
