@@ -313,7 +313,7 @@ cv2.destroyAllWindows()
 | Limitação | Causa | Mitigação |
 |-----------|-------|-----------|
 | Profundidade imprecisa | MiDaS produz profundidade relativa, não métrica | Normalizar por altura estimada do ombro como referência de escala |
-| Sem verificação de working area | Sem coordenadas absolutas em mm | Usar zona 2D na imagem como proxy da área de trabalho |
+| Sem verificação de working área | Sem coordenadas absolutas em mm | Usar zona 2D na imagem como proxy da área de trabalho |
 | Maior latência | MediaPipe + MiDaS juntos são mais lentos que o pipeline on-device da OAK-D | Usar MiDaS_small ou desativar depth e usar apenas pose 2D com `restrict='ood'` |
 | Drift de coordenadas entre sessões | Câmera montada em posição diferente a cada sessão | Calibrar com ArUco marker no início de cada sessão |
 | Modelo treinado com dados OAK-D | Os dados de treino foram coletados com a câmera original | Recoletar pelo menos 20% dos dados com a webcam para fine-tuning |

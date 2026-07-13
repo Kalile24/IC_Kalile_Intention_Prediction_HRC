@@ -1,17 +1,34 @@
 # Robustifying Long-term Human-Robot Collaboration through a Hierarchical and Multimodal Framework
 
-> **Note — this is a testing fork.**
-> This branch (`webcam-runtime-optimizations`) is part of an undergraduate research project (IC)
-> by [Marcos Kalile](https://github.com/Kalile24), a student at IME (Instituto Militar de Engenharia).
-> The goal is to evaluate and stress-test the **intention prediction module** of the original
-> framework under conditions without the OAK-D Lite camera, using a standard USB webcam and
-> MediaPipe Pose as a drop-in replacement. The current runtime also includes webcam
-> capture defaults tuned for Linux/OpenCV: automatic camera discovery, V4L2 capture,
-> MJPG as the default camera format, a small capture buffer, and BGR frame normalization
-> before MediaPipe and the diagnostic HUD.
+> **Note — this is a testing fork, part of a 3-repository undergraduate research project (PIBIC/CNPq, IME/LIARC).**
+> This branch (`webcam-runtime-optimizations`) is maintained by
+> [Marcos Kalile](https://github.com/Kalile24), a student at IME (Instituto
+> Militar de Engenharia). The goal is to evaluate and stress-test the
+> **intention prediction module** (`traj_intention/`) of the original
+> framework under conditions without the OAK-D Lite camera, using a
+> standard USB webcam and MediaPipe Pose as a drop-in replacement, and to
+> test whether injecting a **task-progress context vector** into the
+> classifier improves intention prediction.
+>
+> This repository is the **source of the original checkpoint and the
+> reference `DLinear` architecture** for the other two repositories in the
+> project:
+> - [`IC_Kalile_Dataset`](https://github.com/Kalile24/IC_Kalile_Dataset) —
+>   webcam+MediaPipe data collection, annotation and dataset consolidation
+>   pipeline (no ROS/OAK-D/PyTorch dependency).
+> - [`IC_Kalile_Finetune`](https://github.com/Kalile24/IC_Kalile_Finetune) —
+>   fine-tuning, evaluation, and live inference with the context vector
+>   injected; contains the actual experiment results.
+>
+> This fork adds `run_webcam.py` (OpenCV + MediaPipe Pose instead of
+> OAK-D/BlazePose), runtime hardening for Linux/USB webcams (automatic
+> camera discovery, V4L2 capture, MJPG format, small capture buffer, BGR
+> frame normalization), and diagnostic tooling (`docs/DIAGNOSTICO_WEBCAM.md`).
+> None of this touches `traj_intention/` (the model itself) or the ROS
+> controller — see [CHANGES.md](CHANGES.md) for the full list of additions
+> and the reasoning behind each one.
 >
 > The `original` branch preserves the upstream code untouched.
-> See [CHANGES.md](CHANGES.md) for a detailed description of what was added and why.
 
 ---
 

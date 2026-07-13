@@ -8,10 +8,10 @@ scoped exclusively to the **intention prediction pipeline**.
 
 ## Motivation
 
-The original system requires an **OAK-D Lite** camera with a Myriad VPU to run BlazePose
+The original system requires an **OAK-D Lite** câmera with a Myriad VPU to run BlazePose
 on-device. This makes it impossible to develop, debug, or test the intention prediction
 model without the exact hardware used in the original experiment. The additions here
-decouple the intention predictor from the OAK-D so it can be evaluated and improved on any
+decouple the intention predictor from the OAK-D só it can be evaluated and improved on any
 machine with a standard USB webcam.
 
 ---
@@ -19,18 +19,18 @@ machine with a standard USB webcam.
 ## New File: `run_webcam.py`
 
 Drop-in replacement for `run.py` that runs the full **perception → prediction** pipeline
-using any OpenCV-compatible camera and **MediaPipe Pose** (CPU) instead of the OAK-D +
+using any OpenCV-compatible câmera and **MediaPipe Pose** (CPU) instead of the OAK-D +
 BlazePose (VPU) stack.
 
 ### Preprocessing parity with the original
 
-Every step matches the original `run.py` and `Dataset.py` exactly so the pre-trained
+Every step matches the original `run.py` and `Dataset.py` exactly só the pre-trained
 DLinear checkpoint can be reused without retraining:
 
 | Step | Original `run.py` | `run_webcam.py` |
 |------|-------------------|-----------------|
 | Landmark source | OAK-D BlazePose (VPU) | MediaPipe Pose (CPU) |
-| Joint selection | `landmarks[11:25] + landmarks[0:1]` | Same indices from MediaPipe |
+| Joint selection | `landmarks[11:25] + landmarks[0:1]` | Same índices from MediaPipe |
 | Normalisation | min-max → [0, 2] | Identical |
 | Camera→world rotation | quaternion `[0.14, -0.15, -0.76, 0.62]` | Same (can be disabled for debug) |
 | Z-floor correction | `poses[:,:,2] -= min(Z)` | Identical |
@@ -42,7 +42,7 @@ DLinear checkpoint can be reused without retraining:
 The training data was captured at ~8 fps. Standard webcams deliver 20–30 fps. Without
 throttling, the 5-frame window covers a much shorter time span — movements appear "faster"
 to the model, hurting accuracy. `--proc_fps 8` (default) rate-limits model inference to
-match the training cadence while the camera still captures at full speed.
+match the training cadence while the câmera still captures at full speed.
 
 ### Exponential smoothing
 
@@ -52,7 +52,7 @@ reduces flickering between consecutive predictions with no added latency.
 ### Replay mode (`--replay <file.pkl>`)
 
 Loads a `.pkl` file recorded by the original `run.py` (OAK-D data) and runs it through
-the same prediction pipeline without any camera. Used to verify that the DLinear model
+the same prediction pipeline without any câmera. Used to verify that the DLinear model
 itself is correct before blaming the webcam as the source of error.
 
 ### ROS stubs
@@ -69,7 +69,7 @@ python run_webcam.py --show --task webcam001
 # Let the script find the first usable /dev/video* source
 python run_webcam.py --show --task webcam001 --camera auto
 
-# Force a specific device and camera format
+# Force a specific device and câmera format
 python run_webcam.py --show --task webcam001 --camera /dev/video0 --cam_fourcc MJPG
 
 # Full diagnostics at training FPS
@@ -91,12 +91,12 @@ python run_webcam.py --show --task webcam001 --restrict no
 |----------|---------|---------|
 | `--show` | off | Display video window |
 | `--task` | `webcam001` | Task ID (6-char, 3-digit suffix) |
-| `--camera` | `auto` | OpenCV camera source: auto-detect, numeric index, or `/dev/video*` path |
+| `--camera` | `auto` | OpenCV câmera source: auto-detect, numeric index, or `/dev/video*` path |
 | `--capture_backend` | `v4l2` | OpenCV capture backend (`v4l2` on Linux, or `any`) |
 | `--cam_width` | 1280 | Requested capture width (`0` keeps driver default) |
 | `--cam_height` | 720 | Requested capture height (`0` keeps driver default) |
-| `--cam_fps` | 30 | Requested camera FPS (`0` keeps driver default) |
-| `--cam_fourcc` | `MJPG` | Requested camera format (`MJPG`, `H264`, `YUYV`, etc.) |
+| `--cam_fps` | 30 | Requested câmera FPS (`0` keeps driver default) |
+| `--cam_fourcc` | `MJPG` | Requested câmera format (`MJPG`, `H264`, `YUYV`, etc.) |
 | `--camera_buffer` | 1 | Capture buffer size; lower values reduce latency and stale frames |
 | `--seq_len` | 5 | Frames in the prediction window |
 | `--send_window` | 3 | Confirmations before forwarding intention |
@@ -104,7 +104,7 @@ python run_webcam.py --show --task webcam001 --restrict no
 | `--model_type` | `final_intention` | `final_intention` or `final_traj` |
 | `--video` | off | Save output as MP4 |
 | `--diag` | off | Enable diagnostic overlay and terminal logs |
-| `--no_qrot` | off | Use identity quaternion (disable camera rotation) |
+| `--no_qrot` | off | Use identity quaternion (disable câmera rotation) |
 | `--proc_fps` | 8 | Max inference FPS (0 = unlimited) |
 | `--replay` | — | Path to `.pkl` for offline replay |
 
@@ -117,7 +117,7 @@ on any machine without DepthAI.
 
 ### Drop-in interface
 
-Returns a `FakeBody` object with the same attributes as the original `body` object so it
+Returns a `FakeBody` object with the same attributes as the original `body` object só it
 can be swapped in without changing any downstream code:
 
 ```python
@@ -129,7 +129,7 @@ body.score            # float            — mean visibility of shoulder + wrist
 
 ### Joint mapping
 
-Selects the same 15 upper-body joints as the original system using MediaPipe's indices:
+Selects the same 15 upper-body joints as the original system using MediaPipe's índices:
 
 ```python
 UPPER_BODY_MP_INDICES = list(range(11, 25)) + [0]  # shoulders→wrists + nose
@@ -165,16 +165,16 @@ Terminal output per frame with `--diag`:
 
 This branch keeps the diagnostic behavior above and adds webcam runtime hardening:
 
-- **Automatic camera discovery:** `--camera auto` scans `/dev/video*` sources and common
-  numeric indices, then keeps the first source that actually returns frames.
+- **Automatic câmera discovery:** `--camera auto` scans `/dev/video*` sources and common
+  numeric índices, then keeps the first source that actually returns frames.
 - **Linux-friendly capture path:** `--capture_backend v4l2` is the default because it is
   usually more stable for USB webcams on Ubuntu.
 - **Lower USB bandwidth by default:** `--cam_fourcc MJPG` requests MJPEG from compatible
-  cameras. `H264` and `YUYV` are still available for comparison.
+  câmeras. `H264` and `YUYV` are still available for comparison.
 - **Lower live latency:** `--camera_buffer 1` reduces queued stale frames.
 - **Frame normalization before processing:** grayscale and BGRA frames are converted to
   3-channel BGR before MediaPipe, drawing, and the diagnostic HUD.
-- **Readable high-resolution HUD:** diagnostic overlays scale with frame height so the
+- **Readable high-resolution HUD:** diagnostic overlays scale with frame height só the
   panel stays legible at 720p and higher.
 
 ---
@@ -221,9 +221,9 @@ for the intention predictor:
    currently distorts the scale of all 5 frames in the window; fixed statistics eliminate
    this. This is likely the largest source of accuracy degradation on webcam data.
 
-2. **Temperature scaling** — fit a scalar `T` on the validation set so that
+2. **Temperature scaling** — fit a scalar `T` on the validation set só that
    `logits / T` produces calibrated probabilities. The OOD entropy thresholds (0.4 / 0.5
-   in `predict.py:85-87`) were tuned manually and do not generalise across cameras or users.
+   in `predict.py:85-87`) were tuned manually and do not generalise across câmeras or users.
 
 3. **Fine-tune on webcam data** — after the normalisation fix, collect ~20% of the original
    dataset size with `run_webcam.py` and fine-tune the checkpoint for 10 epochs at `lr=1e-4`
