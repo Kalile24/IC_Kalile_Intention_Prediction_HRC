@@ -5,3 +5,6 @@ webcam.py
 # ignore dirs
 human_traj/
 docs/.obsidian/
+__pycache__/
+*.py[cod]
+.claude/

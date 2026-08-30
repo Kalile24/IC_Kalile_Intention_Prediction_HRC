@@ -41,6 +41,7 @@ webcam mais estável no Linux:
 | `--cam_fps` | `30` | Use `0` para aceitar o padrão do driver |
 | `--cam_fourcc` | `MJPG` | Teste `H264` ou `YUYV` se a câmera não entregar frames em MJPG |
 | `--camera_buffer` | `1` | Aumente apenas se houver instabilidade de captura |
+| `--save_frames` | off | Salva cada frame com esqueleto como PNG. Desativado por padrão para evitar travamentos no vídeo ao vivo |
 
 Comando recomendado para iniciar o teste:
 

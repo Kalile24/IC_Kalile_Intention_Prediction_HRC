@@ -60,10 +60,14 @@ This is the official code repo for the paper [Robustifying Human-Robot Collabora
 
 To set up the environment, run:
 ```
-conda create -n hrc -f env_ubuntu2004.yml
+conda env create -f env_ubuntu2004.yml
 
 conda activate hrc
 ```
+
+For just the `traj_intention/` module (intention prediction, no ROS/robot
+controller), `pip install -r requirements.txt` on Python 3.9 is enough —
+it lists the same pip packages as `env_ubuntu2004.yml`.
 
 ## Prerequisite
 For speech model and scorer, download [deepspeech-0.9.3-models.pbmm] and [deepspeech-0.9.3-models.scorer] from [https://github.com/mozilla/DeepSpeech/releases](https://github.com/mozilla/DeepSpeech/releases), and put these two models into the ./speech.

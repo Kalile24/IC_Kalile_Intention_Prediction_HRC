@@ -103,6 +103,7 @@ python run_webcam.py --show --task webcam001 --restrict no
 | `--restrict` | `ood` | `no` / `ood` / `working_area` / `all` |
 | `--model_type` | `final_intention` | `final_intention` or `final_traj` |
 | `--video` | off | Save output as MP4 |
+| `--save_frames` | off | Save each frame with skeleton overlay as PNG (off by default — avoids live-video stutter) |
 | `--diag` | off | Enable diagnostic overlay and terminal logs |
 | `--no_qrot` | off | Use identity quaternion (disable câmera rotation) |
 | `--proc_fps` | 8 | Max inference FPS (0 = unlimited) |
@@ -185,8 +186,11 @@ This branch keeps the diagnostic behavior above and adds webcam runtime hardenin
 |------|----------|
 | `modulo_predicao_hierarquica.md` | Architecture reference: `IntentionPredictor` layer, `PlanGraph` layer, and the ROS data-flow between them |
 | `melhorias_e_modelo_experimental.md` | Prioritised improvement roadmap: z-score normalisation, temperature scaling, Bayesian smoothing of the intention queue, PlanGraph context injection, GCN skeleton encoder |
-| `resumo_sessao_diagnostico.md` | Root-cause analysis session: the five hypotheses above, expected entropy ranges, and interpretation guide |
-| `DIAGNOSTICO_WEBCAM.md` | Quick-reference card for interpreting `--diag` output |
+| `DIAGNOSTICO_WEBCAM.md` | Root-cause analysis guide: the five hypotheses above, expected entropy ranges, `--diag` output interpretation, and a walkthrough of `run_webcam.py`'s structure |
+
+> (2026-08-25: this table previously also listed `resumo_sessao_diagnostico.md`,
+> which does not exist in this repository — its content lives in
+> `DIAGNOSTICO_WEBCAM.md` above.)
 
 ---
 
